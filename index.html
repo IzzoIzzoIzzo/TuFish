@@ -509,7 +509,7 @@ const STATE = {
     '{"balance":10000,"trades":[],"pnl":0,"startBalance":10000,"dailyPnL":[],"bestDay":0,"maxDrawdown":0}'),
   alerts: JSON.parse(localStorage.getItem('mf_alerts') || '[]'),
   settings: JSON.parse(localStorage.getItem('mf_settings') ||
-    '{"interval":30,"agentMode":"auto","swarm":"moderate","autotrade":"off","capital":10000}'),
+    '{"interval":30,"agentMode":"auto","swarm":"moderate","autotrade":"off","capital":10000,"realTrading":false,"pmApiKey":"","pmApiSecret":"","pmPassphrase":""}'),
   chatHistory: JSON.parse(localStorage.getItem('mf_chat') || '[]'),
   swarmHistory: JSON.parse(localStorage.getItem('mf_swarm') || '[]'),
   signalStats: JSON.parse(localStorage.getItem('mf_sigstats') ||
@@ -972,12 +972,7 @@ function toggleAutoTrade() {
   STATE.autoTrading = !STATE.autoTrading;
   if (STATE.autoTrading) {
     document.querySelector('.btn-green[onclick*="toggleAutoTrade"]').textContent = '⏹ STOP AUTO';
-    STATE.autoTradeInterval = setInterval(() => {
-      if (STATE.signals.length > 0) {
-        const topSig = STATE.signals.filter(s => s.signal.confidence > 70)[0];
-        if (topSig) executeTrade(topSig.market.id, topSig.signal.type);
-      }
-    }, 15000);
+    STATE.autoTradeInterval = setInterval(autoTradeTick, 15000);
     toast('🤖 Auto-trader started — trading top signals', 'success');
   } else {
     document.querySelector('.btn-green[onclick*="toggleAutoTrade"]').textContent = '🤖 AUTO-TRADE';
@@ -1303,6 +1298,321 @@ function init() {
     ethereum.request({ method: 'eth_accounts' }).then(accs => { if (accs.length) connectWallet(); });
   }
 }
+
+// ═══════════════════════════════════════════
+// POLYMARKET REAL TRADING INTEGRATION
+// ═══════════════════════════════════════════
+
+let polymarketWallet = null;
+let polymarketConnected = false;
+
+// Load ethers if available
+async function loadEthers() {
+  if (typeof ethers !== 'undefined') return true;
+  return new Promise((resolve) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js';
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+  });
+}
+
+async function connectWallet() {
+  if (typeof window.ethereum === 'undefined') {
+    toast('🦊 MetaMask not installed', 'danger');
+    return false;
+  }
+  try {
+    const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
+    polymarketWallet = accounts[0];
+    polymarketConnected = true;
+    toast(`✅ Wallet connected: ${polymarketWallet.slice(0,6)}...${polymarketWallet.slice(-4)}`, 'success');
+    updateWalletUI();
+    return true;
+  } catch (e) {
+    toast('❌ Wallet connection rejected', 'danger');
+    return false;
+  }
+}
+
+function disconnectWallet() {
+  polymarketWallet = null;
+  polymarketConnected = false;
+  toast('Wallet disconnected', 'info');
+  updateWalletUI();
+}
+
+function updateWalletUI() {
+  const el = document.getElementById('wallet-status');
+  if (!el) return;
+  if (polymarketConnected) {
+    el.innerHTML = `<span style="color:var(--green)">●</span> ${polymarketWallet.slice(0,6)}...${polymarketWallet.slice(-4)}`;
+    el.className = 'badge online';
+  } else {
+    el.innerHTML = '<span style="color:var(--red)">○</span> Disconnected';
+    el.className = 'badge offline';
+  }
+}
+
+// Polymarket CLOB API Client
+class PolymarketClobClient {
+  constructor(apiKey, apiSecret, passphrase) {
+    this.baseUrl = 'https://clob.polymarket.com';
+    this.apiKey = apiKey;
+    this.apiSecret = apiSecret;
+    this.passphrase = passphrase;
+    this.useProxy = false;
+  }
+
+  async _request(method, path, body = null) {
+    const url = this.baseUrl + path;
+    const headers = {
+      'Content-Type': 'application/json',
+    };
+    if (this.apiKey) {
+      headers['POLY-API-KEY'] = this.apiKey;
+      headers['POLY-API-SECRET'] = this.apiSecret;
+      headers['POLY-API-PASSPHRASE'] = this.passphrase;
+    }
+    try {
+      const resp = await fetch(url, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : null,
+      });
+      if (!resp.ok) throw new Error(`CLOB ${resp.status}: ${await resp.text().catch(() => '')}`);
+      return await resp.json();
+    } catch (e) {
+      // Try via CORS proxy
+      if (!this.useProxy) {
+        this.useProxy = true;
+        return this._request(method, path, body);
+      }
+      throw e;
+    }
+  }
+
+  async getMarkets(nextCursor = '') {
+    const params = nextCursor ? `?next_cursor=${nextCursor}` : '';
+    return this._request('GET', `/markets${params}`);
+  }
+
+  async getMarket(marketId) {
+    return this._request('GET', `/markets/${marketId}`);
+  }
+
+  async getBook(marketId, side = 'BUY') {
+    return this._request('GET', `/book?market=${marketId}&side=${side}`);
+  }
+
+  async getMidpoint(marketId) {
+    return this._request('GET', `/midpoint?market=${marketId}`);
+  }
+
+  async getPrice(marketId, side = 'BUY', outcome = 'YES') {
+    return this._request('GET', `/price?market=${marketId}&side=${side}&outcome=${outcome}`);
+  }
+
+  async postOrder(order) {
+    return this._request('POST', '/order', order);
+  }
+
+  async cancelOrder(orderId) {
+    return this._request('DELETE', `/order?id=${orderId}`);
+  }
+
+  async getOrders(cursor = '') {
+    const params = cursor ? `?cursor=${cursor}` : '';
+    return this._request('GET', `/orders${params}`);
+  }
+
+  async getFills(cursor = '') {
+    const params = cursor ? `?cursor=${cursor}` : '';
+    return this._request('GET', `/fills${params}`);
+  }
+
+  async getBalance() {
+    return this._request('GET', '/balance');
+  }
+
+  async getTransfers(cursor = '') {
+    const params = cursor ? `?cursor=${cursor}` : '';
+    return this._request('GET', `/transfers${params}`);
+  }
+
+  buildOrder(signal, market, price, size) {
+    const side = signal === 'BUY' ? 'BUY' : 'SELL';
+    const outcome = side === 'BUY' ? 'YES' : 'NO';
+    return {
+      market: market.id || market.condition_id,
+      price: price.toString(),
+      size: size.toString(),
+      side,
+      outcome,
+      order_type: 'limit',
+      time_in_force: 'GTC',
+      expiration: Math.floor(Date.now() / 1000) + 86400 * 7,
+    };
+  }
+}
+
+let polymarketApi = null;
+
+function getPolymarketCreds() {
+  const key = document.getElementById('pm-api-key')?.value || STATE.settings.pmApiKey || '';
+  const secret = document.getElementById('pm-api-secret')?.value || STATE.settings.pmApiSecret || '';
+  const passphrase = document.getElementById('pm-passphrase')?.value || STATE.settings.pmPassphrase || '';
+  return { key, secret, passphrase };
+}
+
+function savePolymarketCreds() {
+  const { key, secret, passphrase } = getPolymarketCreds();
+  STATE.settings.pmApiKey = key;
+  STATE.settings.pmApiSecret = secret;
+  STATE.settings.pmPassphrase = passphrase;
+  saveState();
+  if (key && secret && passphrase) {
+    polymarketApi = new PolymarketClobClient(key, secret, passphrase);
+    toast('Polymarket API configured', 'success');
+  }
+}
+
+function toggleTradingMode() {
+  STATE.settings.realTrading = !STATE.settings.realTrading;
+  saveState();
+  const el = document.getElementById('trading-mode-toggle');
+  if (el) {
+    el.textContent = STATE.settings.realTrading ? '🔴 Real Trading' : '🟢 Simulated';
+    el.className = STATE.settings.realTrading ? 'btn btn-sm danger' : 'btn btn-sm';
+  }
+  toast(`Trading mode: ${STATE.settings.realTrading ? 'REAL' : 'SIMULATED'}`, STATE.settings.realTrading ? 'warning' : 'info');
+}
+
+async function executeRealTrade(signal, market, confidence) {
+  if (!polymarketApi) {
+    const { key, secret, passphrase } = getPolymarketCreds();
+    if (!key || !secret || !passphrase) {
+      toast('⚠ Configure Polymarket API credentials in Settings', 'warning');
+      return null;
+    }
+    polymarketApi = new PolymarketClobClient(key, secret, passphrase);
+  }
+
+  if (!polymarketConnected || !polymarketWallet) {
+    const connected = await connectWallet();
+    if (!connected) {
+      toast('⚠ Wallet required for real trading', 'warning');
+      return null;
+    }
+  }
+
+  try {
+    const kellyPct = Math.min(0.25, Math.max(0.01, (confidence * 2 - 1)));
+    const balance = STATE.portfolio.balance;
+    const size = balance * kellyPct;
+    const price = (market.yes_price || 0.5);
+    const order = polymarketApi.buildOrder(signal, market, price, Math.max(1, Math.round(size / price)));
+    
+    toast(`📤 Placing ${signal} order on ${(market.question||'').slice(0,30)}...`, 'info');
+    const result = await polymarketApi.postOrder(order);
+    
+    STATE.portfolio.trades.push({
+      date: new Date().toISOString(),
+      market: market.question,
+      signal,
+      side: signal === 'BUY' ? 'YES' : 'NO',
+      amount: size,
+      entry: (price * 100).toFixed(1) + '%',
+      exit: 'open',
+      pnl: 0,
+      outcome: 'open',
+      strategy: 'Polymarket Real',
+      orderId: result.id,
+    });
+    STATE.portfolio.balance -= size;
+    saveState();
+    renderPortfolio();
+    toast(`✅ Order placed: ${signal} $${size.toFixed(2)}`, 'profit');
+    return result;
+  } catch (e) {
+    toast(`❌ Trade failed: ${e.message}`, 'danger');
+    return null;
+  }
+}
+
+// Patch auto-trader to support real execution
+function autoTradeTick() {
+  if (STATE.signals.length > 0) {
+    const topSig = STATE.signals.filter(s => s.signal.confidence > 70)[0];
+    if (topSig && STATE.settings.realTrading && polymarketApi) {
+      const market = STATE.markets.find(m => m.id === topSig.market.id);
+      if (market) executeRealTrade(topSig.signal.type, market, topSig.signal.confidence / 100);
+    } else if (topSig) {
+      executeTrade(topSig.market.id, topSig.signal.type);
+    }
+  }
+}
+
+// Wallet UI in header
+function addWalletUI() {
+  const right = document.querySelector('.header-right');
+  if (!right) return;
+  const div = document.createElement('div');
+  div.id = 'wallet-status';
+  div.className = 'badge offline';
+  div.innerHTML = '<span style="color:var(--red)">○</span> Disconnected';
+  div.style.cursor = 'pointer';
+  div.title = 'Click to connect MetaMask';
+  div.onclick = function() { if (polymarketConnected) disconnectWallet(); else connectWallet(); };
+  right.insertBefore(div, right.firstChild);
+
+  const modeBtn = document.createElement('button');
+  modeBtn.id = 'trading-mode-toggle';
+  modeBtn.className = 'btn btn-sm';
+  modeBtn.textContent = STATE.settings.realTrading ? '🔴 Real Trading' : '🟢 Simulated';
+  modeBtn.style.fontSize = '9px';
+  modeBtn.onclick = toggleTradingMode;
+  right.insertBefore(modeBtn, right.firstChild);
+}
+
+// Add Polymarket settings to settings panel
+function addPolymarketSettings() {
+  const settingsEl = document.getElementById('settings-content') || document.querySelector('.settings-panel');
+  if (!settingsEl) return;
+  const section = document.createElement('div');
+  section.style.cssText = 'margin-top:12px;padding-top:12px;border-top:1px solid var(--border)';
+  section.innerHTML = `
+    <div style="font-size:11px;font-weight:700;color:var(--gold);margin-bottom:6px">🔐 POLYMARKET REAL TRADING</div>
+    <div style="display:grid;gap:4px">
+      <input id="pm-api-key" placeholder="API Key" class="setting-input" style="width:100%;padding:4px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px" value="${STATE.settings.pmApiKey || ''}">
+      <input id="pm-api-secret" type="password" placeholder="API Secret" class="setting-input" style="width:100%;padding:4px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px" value="${STATE.settings.pmApiSecret || ''}">
+      <input id="pm-passphrase" type="password" placeholder="Passphrase" class="setting-input" style="width:100%;padding:4px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px" value="${STATE.settings.pmPassphrase || ''}">
+      <button class="btn btn-sm" onclick="savePolymarketCreds()" style="font-size:9px;margin-top:4px">Save Credentials</button>
+    </div>
+    <div style="font-size:9px;color:var(--text2);margin-top:6px">
+      ${polymarketConnected ? `<span style="color:var(--green)">● Wallet: ${polymarketWallet.slice(0,6)}...</span>` : '<span>No wallet connected</span>'}
+      <br>Get API keys from <a href="https://polymarket.com/profile/api" target="_blank" style="color:var(--cyan)">Polymarket API</a>
+    </div>`;
+  settingsEl.appendChild(section);
+}
+
+// Patch init to add Polymarket features
+const _origInit = init;
+window.init = function() {
+  loadEthers().then(loaded => {
+    if (!loaded) console.warn('Ethers not loaded, wallet features disabled');
+  });
+  addWalletUI();
+  _origInit();
+  setTimeout(addPolymarketSettings, 500);
+};
+
+// Re-connect wallet if previously connected
+window.connectWallet = connectWallet;
+window.disconnectWallet = disconnectWallet;
+window.executeRealTrade = executeRealTrade;
+window.toggleTradingMode = toggleTradingMode;
 
 document.addEventListener('DOMContentLoaded', init);
 </script>
