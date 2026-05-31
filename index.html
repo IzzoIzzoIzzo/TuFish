@@ -126,6 +126,8 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); co
 .mi-source.crypto { background: rgba(255,215,0,0.15); color: var(--crypto-color); }
 .mi-source.stocks { background: rgba(168,85,247,0.15); color: var(--stock-color); }
 .mi-source.solana { background: rgba(0,255,136,0.15); color: var(--solana-color); }
+.mi-source.dexscreener { background: rgba(255,107,157,0.15); color: var(--pink); }
+.sc-source.dexscreener { background: rgba(255,107,157,0.15); color: var(--pink); }
 .port-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
 .port-box { text-align: center; padding: 14px; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); }
 .port-box .pb-val { font-size: 24px; font-weight: 700; }
@@ -211,6 +213,7 @@ tr:hover td { background: var(--bg3); }
     <div class="badge offline" id="badge-crypto">CRYPTO</div>
     <div class="badge offline" id="badge-stocks">STOCKS</div>
     <div class="badge offline" id="badge-solana">SOL</div>
+    <div class="badge offline" id="badge-dex">MEME</div>
   </div>
 </div>
 <div class="app">
@@ -246,6 +249,7 @@ tr:hover td { background: var(--bg3); }
           <button class="qa-btn" onclick="filterSource('crypto',this)" style="font-size:8px;color:var(--crypto-color)">CRYPTO</button>
           <button class="qa-btn" onclick="filterSource('stocks',this)" style="font-size:8px;color:var(--stock-color)">STOCKS</button>
           <button class="qa-btn" onclick="filterSource('solana',this)" style="font-size:8px;color:var(--solana-color)">SOL</button>
+          <button class="qa-btn" onclick="filterSource('dexscreener',this)" style="font-size:8px;color:var(--pink)">MEME</button>
         </div>
         <div class="signal-grid" id="signals-list">
           <div style="text-align:center;padding:40px;color:var(--text2);font-size:13px">
@@ -267,6 +271,7 @@ tr:hover td { background: var(--bg3); }
               <option value="crypto">Crypto</option>
               <option value="stocks">Stocks</option>
               <option value="solana">Solana</option>
+              <option value="dexscreener">Memecoins</option>
             </select>
             <button class="btn btn-sm" onclick="loadMarkets()">↻</button>
           </div>
@@ -459,7 +464,7 @@ const STATE = {
   markets: [], signals: [],
   portfolio: loadSafe('mf_portfolio', {balance:10000,trades:[],pnl:0,startBalance:10000,dailyPnL:[],bestDay:0,maxDrawdown:0}),
   alerts: loadSafe('mf_alerts', []),
-  settings: loadSafe('mf_settings', {interval:30,agentMode:'auto',swarm:'moderate',autotrade:'off',capital:10000,realTrading:false,pushNotify:false,theme:'dark',corsProxy:'https://corsproxy.io/?',sources:{polymarket:true,crypto:true,stocks:true,solana:true},pmApiKey:'',pmApiSecret:'',pmPassphrase:''}),
+  settings: loadSafe('mf_settings', {interval:30,agentMode:'auto',swarm:'moderate',autotrade:'off',capital:10000,realTrading:false,pushNotify:false,theme:'dark',corsProxy:'https://corsproxy.io/?',sources:{polymarket:true,crypto:true,stocks:true,solana:true,dexscreener:true},pmApiKey:'',pmApiSecret:'',pmPassphrase:''}),
   swarmHistory: loadSafe('mf_swarm', []),
   signalStats: loadSafe('mf_sigstats', {total:0,wins:0,losses:0,totalProfit:0}),
   wallet: null, polymarketConnected: false, polymarketApi: null,
@@ -626,6 +631,62 @@ ADAPTERS.solana = new (class extends BaseAdapter {
         return { id: 'sol_' + t.m.toLowerCase(), question: t.m + ' ' + (chg >= 0 ? '>= $' : '<= $') + Math.max(0.001, price > 0 ? (chg >= 0 ? price * 1.05 : price * 0.95) : 0.1 + Math.random() * 50).toFixed(t.m === 'SOL' ? 2 : 4) + (i % 2 ? ' this month?' : ' this week?'), category: 'solana', adapter: 'solana', yes_price: Math.min(0.95, Math.max(0.05, 0.5 + chg * 0.01)), volume: Math.floor(1e5 + Math.random() * 1e7), liquidity: Math.floor(1e6 + Math.random() * 1e8), change24h: chg, current_price: price || (0.1 + Math.random() * 100) };
       });
     } catch { this.setBadge(false); return tokens.map((t,i) => ({ id: 'sol_fb_' + i, question: t.m + ' prediction?', category: 'solana', adapter: 'solana', yes_price: 0.4 + Math.random() * 0.3, volume: Math.floor(1e5 + Math.random() * 1e7), liquidity: Math.floor(1e6 + Math.random() * 1e8), change24h: (Math.random() - 0.5) * 12 })); }
+  }
+});
+
+ADAPTERS.dexscreener = new (class extends BaseAdapter {
+  constructor() { super({key:'dexscreener',label:'Memecoins',icon:'🌮',color:'#ff6b9d',badgeId:'badge-dex'}); }
+  async fetchMarkets() {
+    const memecoins = [
+      {s:'BONK',n:'Bonk',a:'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263'},
+      {s:'WIF',n:'DogWifHat',a:'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm'},
+      {s:'POPCAT',n:'Popcat',a:'7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr'},
+      {s:'MEW',n:'cat in a dogs world',a:'MEW1gQWJ3nEXg2qgERiKu7FAFj79PHvQVREQUzScPP5'},
+      {s:'SAMO',n:'Samoyed Coin',a:'7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU'},
+      {s:'MYRO',n:'Myro',a:'HhJpBhRRn4g56VsyLuT8DL5Bv31HkXqsrahTTUCZeZg4'},
+      {s:'PENG',n:'Peng',a:'PENGuBnHr3UVfMi6T84B3r4qKpYFqh9hEw2JkfPfuVr'},
+      {s:'BOME',n:'BOOK OF MEME',a:'ukHH6c7mMyiWCf1b9pnWe25TSpkDDt3H5pQZgZ74J82'},
+      {s:'SILLY',n:'Silly Dragon',a:'7EYnhQoR9YM3N7UoaKRoA44Uy8JeaZV3RyouHeoBruuR'},
+      {s:'MICHI',n:'Michi',a:'5B3Xx1RmXxJ6x3STgKvLTG6sPjjfhPL1Jd3yDbQWz3Pp'},
+    ];
+    try {
+      const addresses = memecoins.map(t => t.a).join(',');
+      const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + memecoins.map(t => t.a).join(','), { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const pairs = data.pairs || [];
+      const bestPairs = {};
+      pairs.forEach(p => {
+        if (p.chainId !== 'solana') return;
+        const addr = p.baseToken.address;
+        if (!bestPairs[addr] || parseFloat(p.liquidity?.usd || 0) > parseFloat(bestPairs[addr].liquidity?.usd || 0)) {
+          bestPairs[addr] = p;
+        }
+      });
+      this.setBadge(true);
+      return memecoins.map((t, i) => {
+        const p = bestPairs[t.a];
+        if (!p || !p.priceUsd) {
+          return { id: 'dex_fb_' + i, question: t.s + ' ' + (Math.random() > 0.5 ? 'moon?' : 'dump?'), category: 'memecoins', adapter: 'dexscreener', yes_price: 0.5, volume: Math.floor(1e5 + Math.random() * 1e6), liquidity: Math.floor(1e4 + Math.random() * 5e5), change24h: (Math.random() - 0.5) * 30 };
+        }
+        const price = parseFloat(p.priceUsd);
+        const vol = parseFloat(p.volume?.h24 || 0);
+        const liq = parseFloat(p.liquidity?.usd || 0);
+        const chg24 = parseFloat(p.priceChange?.h24 || 0);
+        const fdv = parseFloat(p.fdv || 0);
+        const prob = Math.min(0.95, Math.max(0.05, 0.5 + chg24 * 0.005));
+        return {
+          id: 'dex_' + t.s.toLowerCase(),
+          question: t.s + ' ' + (chg24 >= 0 ? '>= $' : '<= $') + (price * (1 + Math.abs(chg24) * 0.005 + 0.05)).toFixed(8) + (i % 2 ? ' this week?' : ' today?'),
+          category: 'memecoins', adapter: 'dexscreener',
+          yes_price: prob, volume: vol, liquidity: liq,
+          change24h: chg24, current_price: price, fdv: fdv,
+        };
+      });
+    } catch {
+      this.setBadge(false);
+      return memecoins.map((t,i) => ({ id:'dex_fb_'+i, question:t.s+' '+(Math.random()>0.5?'pump?':'dump?'), category:'memecoins', adapter:'dexscreener', yes_price:0.4+Math.random()*0.3, volume:Math.floor(1e5+Math.random()*1e6), liquidity:Math.floor(1e4+Math.random()*5e5), change24h:(Math.random()-0.5)*30 }));
+    }
   }
 });
 
@@ -880,7 +941,7 @@ function updateTicker() { const p = STATE.portfolio, bal = p.startBalance + p.pn
 
 // ===== SENTIMENT =====
 function generateSentiment() {
-  const cats = [{id:'polymarket',name:'Polymarket',emoji:'📊'},{id:'crypto',name:'Crypto',emoji:'₿'},{id:'stocks',name:'Stocks',emoji:'📈'},{id:'solana',name:'Solana',emoji:'◎'}];
+  const cats = [{id:'polymarket',name:'Polymarket',emoji:'📊'},{id:'crypto',name:'Crypto',emoji:'₿'},{id:'stocks',name:'Stocks',emoji:'📈'},{id:'solana',name:'Solana',emoji:'◎'},{id:'dexscreener',name:'Memecoins',emoji:'🌮'}];
   const overall = 30 + Math.random() * 40;
   document.getElementById('fg-value').textContent = Math.round(overall); document.getElementById('fg-label').textContent = overall > 60 ? 'Greed' : overall > 40 ? 'Neutral' : 'Fear'; document.getElementById('fg-needle').style.left = overall + '%';
   const grid = document.getElementById('sentiment-grid'); let tb = 0, tn = 0, tbe = 0;
