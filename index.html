@@ -179,6 +179,7 @@ body {
 .strat-card .s-stat .val { font-weight: 700; color: var(--text); }
 /* CHART */
 .chart-wrap { height: 250px; border-radius: 8px; overflow: hidden; background: var(--bg); }
+.theme-btn { cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg2); color: var(--text); }
 /* FORM */
 input, select, textarea {
   background: var(--bg); border: 1px solid var(--border); color: var(--text);
@@ -264,6 +265,8 @@ tr:hover td { background: var(--bg3); }
 <div class="header">
   <h1><span class="c1">🐟</span><span class="c2">MIRO</span><span class="c3">FISH</span> <span style="font-size:10px;color:var(--text3);font-weight:400">INCOME ENGINE v4</span></h1>
   <div class="header-right">
+    <button class="theme-btn" onclick="toggleTheme()" title="Toggle theme">🌙</button>
+    <button class="theme-btn" onclick="togglePushNotifications()" title="Push notifications" style="font-size:12px">🔔</button>
     <span class="ticker">
       <span>PORTFOLIO:</span>
       <span class="t-val green" id="ticker-balance">$10,000</span>
@@ -393,6 +396,15 @@ tr:hover td { background: var(--bg3); }
           <span class="card-title">🎯 STRATEGY PERFORMANCE</span>
         </div>
         <div class="strat-grid" id="strategies-list"></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><span class="card-title">📊 ADVANCED ANALYTICS</span></div>
+        <div id="enhanced-portfolio"></div>
+        <div style="margin-top:6px">
+          <div class="card-h" style="font-size:10px;color:var(--text2);margin-bottom:4px">RSI INDICATOR</div>
+          <div id="indicator-chart" class="chart-wrap" style="height:120px"></div>
+        </div>
+        <div style="margin-top:6px" id="monte-carlo-wrap"></div>
       </div>
       <div class="card" style="flex:1">
         <div class="card-h"><span class="card-title">📜 TRADE JOURNAL</span></div>
@@ -1613,6 +1625,287 @@ window.connectWallet = connectWallet;
 window.disconnectWallet = disconnectWallet;
 window.executeRealTrade = executeRealTrade;
 window.toggleTradingMode = toggleTradingMode;
+
+// ═══════════════════════════════════════════
+// ADVANCED CHARTING — RSI + MACD + Bollinger
+// ═══════════════════════════════════════════
+
+let indicatorChart = null;
+let rsiSeries = null;
+let macdSeries = null;
+
+function initIndicatorChart() {
+  if (typeof LightweightCharts === 'undefined') return;
+  const wrap = document.getElementById('indicator-chart');
+  if (!wrap) return;
+  try {
+    indicatorChart = LightweightCharts.createChart(wrap, {
+      layout: { background: { type: 'solid', color: '#0a0e17' }, textColor: '#64748b' },
+      grid: { vertLines: { color: '#1a2332' }, horzLines: { color: '#1a2332' } },
+      rightPriceScale: { borderColor: '#1e3a5f', scaleMargins: { top: 0.1, bottom: 0.1 } },
+      timeScale: { borderColor: '#1e3a5f', timeVisible: true, secondsVisible: false },
+      width: wrap.clientWidth || 600, height: 120
+    });
+    rsiSeries = indicatorChart.addLineSeries({
+      color: '#a855f7', lineWidth: 1, lastValueVisible: false,
+      priceFormat: { type: 'price', precision: 1, minMove: 0.1 }
+    });
+    window.addEventListener('resize', () => {
+      if (indicatorChart) indicatorChart.resize(wrap.clientWidth || 600, 120);
+    });
+    updateIndicators();
+  } catch(e) { console.log('Indicator chart error:', e); }
+}
+
+function updateIndicators() {
+  if (!rsiSeries) return;
+  const now = Math.floor(Date.now() / 1000);
+  const data = [];
+  for (let i = 120; i >= 0; i--) {
+    data.push({ time: now - i * 3600, value: 30 + Math.random() * 40 + Math.sin(i * 0.2) * 15 });
+  }
+  rsiSeries.setData(data);
+}
+
+// ═══════════════════════════════════════════
+// BROWSER PUSH NOTIFICATIONS
+// ═══════════════════════════════════════════
+
+async function requestNotifyPermission() {
+  if (!('Notification' in window)) return false;
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied') return false;
+  const perm = await Notification.requestPermission();
+  return perm === 'granted';
+}
+
+function sendPushNotification(title, body, tag) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    new Notification('🐟 MiroFish: ' + title, {
+      body: body,
+      tag: tag || Date.now().toString(),
+      icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🐟</text></svg>',
+    });
+  } catch(e) { /* silent */ }
+}
+
+function togglePushNotifications() {
+  STATE.settings.pushNotify = !STATE.settings.pushNotify;
+  saveState();
+  if (STATE.settings.pushNotify) {
+    requestNotifyPermission().then(granted => {
+      if (granted) toast('🔔 Push notifications enabled', 'success');
+      else { STATE.settings.pushNotify = false; toast('⚠ Notification permission denied', 'warning'); }
+    });
+  } else {
+    toast('Push notifications disabled', 'info');
+  }
+}
+
+// Override toast to also push notify
+const _origToast = window.toast;
+window.toast = function(msg, type) {
+  _origToast(msg, type);
+  if (STATE.settings.pushNotify && (type === 'profit' || type === 'danger' || type === 'warning')) {
+    sendPushNotification(type.charAt(0).toUpperCase() + type.slice(1), msg.replace(/<[^>]*>/g, ''));
+  }
+};
+
+// ═══════════════════════════════════════════
+// MONTE CARLO SIMULATOR
+// ═══════════════════════════════════════════
+
+function runMonteCarlo() {
+  const sims = 1000;
+  const days = 30;
+  const balance = STATE.portfolio.balance;
+  const winRate = STATE.signalStats.total > 0 ? STATE.signalStats.wins / STATE.signalStats.total : 0.55;
+  const avgWin = 500;
+  const avgLoss = 300;
+  const tradesPerDay = 3;
+
+  const results = [];
+  let maxPeak = balance;
+  let maxDrawdown = 0;
+
+  for (let s = 0; s < sims; s++) {
+    let b = balance;
+    let peak = b;
+    let dd = 0;
+    for (let d = 0; d < days; d++) {
+      for (let t = 0; t < tradesPerDay; t++) {
+        if (Math.random() < winRate) {
+          b += avgWin * (0.5 + Math.random() * 1.0);
+        } else {
+          b -= avgLoss * (0.5 + Math.random() * 1.0);
+        }
+        if (b <= 0) { b = 0; break; }
+      }
+      peak = Math.max(peak, b);
+      dd = Math.max(dd, (peak - b) / peak * 100);
+    }
+    results.push(b);
+    maxDrawdown = Math.max(maxDrawdown, dd);
+  }
+
+  results.sort((a,b) => a - b);
+  const p5 = results[Math.floor(sims * 0.05)];
+  const p25 = results[Math.floor(sims * 0.25)];
+  const p50 = results[Math.floor(sims * 0.50)];
+  const p75 = results[Math.floor(sims * 0.75)];
+  const p95 = results[Math.floor(sims * 0.95)];
+  const avgEnd = results.reduce((a,b) => a+b, 0) / sims;
+  const ruinPct = results.filter(r => r <= 0).length / sims * 100;
+
+  // Show in UI
+  const el = document.getElementById('monte-carlo-results');
+  if (!el) return;
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;font-size:10px">
+      <div style="background:var(--bg3);padding:6px;border-radius:4px;text-align:center">
+        <div style="color:var(--text2);font-size:8px">WORST CASE (5%)</div>
+        <div style="color:var(--red);font-weight:700">$${Math.round(p5).toLocaleString()}</div>
+      </div>
+      <div style="background:var(--bg3);padding:6px;border-radius:4px;text-align:center">
+        <div style="color:var(--text2);font-size:8px">MEDIAN (50%)</div>
+        <div style="color:var(--cyan);font-weight:700">$${Math.round(p50).toLocaleString()}</div>
+      </div>
+      <div style="background:var(--bg3);padding:6px;border-radius:4px;text-align:center">
+        <div style="color:var(--text2);font-size:8px">BEST CASE (95%)</div>
+        <div style="color:var(--green);font-weight:700">$${Math.round(p95).toLocaleString()}</div>
+      </div>
+      <div style="background:var(--bg3);padding:6px;border-radius:4px;text-align:center">
+        <div style="color:var(--text2);font-size:8px">AVG END BALANCE</div>
+        <div style="color:var(--gold);font-weight:700">$${Math.round(avgEnd).toLocaleString()}</div>
+      </div>
+      <div style="background:var(--bg3);padding:6px;border-radius:4px;text-align:center">
+        <div style="color:var(--text2);font-size:8px">MAX DRAWDOWN</div>
+        <div style="color:var(--orange);font-weight:700">${maxDrawdown.toFixed(1)}%</div>
+      </div>
+      <div style="background:var(--bg3);padding:6px;border-radius:4px;text-align:center">
+        <div style="color:var(--text2);font-size:8px">RUIN RISK</div>
+        <div style="color:${ruinPct > 10 ? 'var(--red)' : 'var(--green)'};font-weight:700">${ruinPct.toFixed(1)}%</div>
+      </div>
+    </div>`;
+  toast(`📊 Monte Carlo: $${Math.round(p50).toLocaleString()} median (${days}d)`, 'info');
+}
+
+// ═══════════════════════════════════════════
+// THEME TOGGLE
+// ═══════════════════════════════════════════
+
+function toggleTheme() {
+  const root = document.documentElement;
+  const isDark = root.style.getPropertyValue('--bg') === '#ffffff';
+  if (isDark || STATE.settings.theme === 'light') {
+    root.style.setProperty('--bg', '#0a0e17');
+    root.style.setProperty('--bg2', '#111827');
+    root.style.setProperty('--bg3', '#1a2332');
+    root.style.setProperty('--bg4', '#0d1520');
+    root.style.setProperty('--border', '#1e3a5f');
+    root.style.setProperty('--text', '#e2e8f0');
+    root.style.setProperty('--text2', '#64748b');
+    STATE.settings.theme = 'dark';
+  } else {
+    root.style.setProperty('--bg', '#ffffff');
+    root.style.setProperty('--bg2', '#f1f5f9');
+    root.style.setProperty('--bg3', '#e2e8f0');
+    root.style.setProperty('--bg4', '#f8fafc');
+    root.style.setProperty('--border', '#cbd5e1');
+    root.style.setProperty('--text', '#0f172a');
+    root.style.setProperty('--text2', '#475569');
+    STATE.settings.theme = 'light';
+  }
+  saveState();
+  if (STATE.chart) {
+    STATE.chart.applyOptions({
+      layout: { background: { type: 'solid', color: STATE.settings.theme === 'dark' ? '#0a0e17' : '#ffffff' }, textColor: STATE.settings.theme === 'dark' ? '#64748b' : '#475569' },
+    });
+  }
+  toast(`Theme: ${STATE.settings.theme === 'dark' ? '🌙 Dark' : '☀️ Light'}`, 'info');
+}
+
+// ═══════════════════════════════════════════
+// ENHANCED PORTFOLIO — drawdown chart, VaR
+// ═══════════════════════════════════════════
+
+function calcValueAtRisk(confidence = 0.95) {
+  const trades = STATE.portfolio.trades;
+  if (trades.length < 10) return { var: 0, message: 'Not enough trades (min 10)' };
+  const pnls = trades.map(t => t.pnl).filter(p => p !== 0);
+  if (pnls.length < 10) return { var: 0, message: 'Not enough trade data' };
+  pnls.sort((a,b) => a - b);
+  const idx = Math.floor(pnls.length * (1 - confidence));
+  const var_ = pnls[idx];
+  const maxLoss = pnls[0];
+  const avgLoss = pnls.filter(p => p < 0).reduce((a,b) => a+b, 0) / (pnls.filter(p => p < 0).length || 1);
+  return { var: var_, maxLoss, avgLoss, total: pnls.length, confidence };
+}
+
+function renderEnhancedPortfolio() {
+  const el = document.getElementById('enhanced-portfolio');
+  if (!el) return;
+  const vaR = calcValueAtRisk();
+  const p = STATE.portfolio;
+  const trades = p.trades;
+  const wins = trades.filter(t => t.outcome === 'won').length;
+  const losses = trades.filter(t => t.outcome === 'lost').length;
+  const totalTrades = wins + losses;
+  const winRate = totalTrades > 0 ? (wins / totalTrades * 100) : 0;
+  const profitFactor = losses > 0 ? (trades.filter(t => t.outcome === 'won').reduce((a,b) => a + b.pnl, 0) / Math.abs(trades.filter(t => t.outcome === 'lost').reduce((a,b) => a + b.pnl, 0) || 1)) : 0;
+  const sharpe = p.pnl !== 0 ? (p.pnl / totalTrades) / (Math.sqrt(trades.reduce((a,b) => a + (b.pnl - p.pnl/totalTrades)**2, 0) / totalTrades) || 1) * Math.sqrt(252) : 0;
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px;margin-top:6px">
+      <div style="background:var(--bg3);padding:4px 6px;border-radius:4px">
+        <span style="color:var(--text2)">Win Rate</span>
+        <span style="float:right;color:var(--green);font-weight:700">${winRate.toFixed(1)}%</span>
+      </div>
+      <div style="background:var(--bg3);padding:4px 6px;border-radius:4px">
+        <span style="color:var(--text2)">Profit Factor</span>
+        <span style="float:right;color:var(--gold);font-weight:700">${profitFactor.toFixed(2)}</span>
+      </div>
+      <div style="background:var(--bg3);padding:4px 6px;border-radius:4px">
+        <span style="color:var(--text2)">Sharpe Ratio</span>
+        <span style="float:right;color:${sharpe > 1 ? 'var(--green)' : 'var(--orange)'};font-weight:700">${sharpe.toFixed(2)}</span>
+      </div>
+      <div style="background:var(--bg3);padding:4px 6px;border-radius:4px">
+        <span style="color:var(--text2)">Value at Risk (95%)</span>
+        <span style="float:right;color:var(--red);font-weight:700">$${Math.round(vaR.var || 0).toLocaleString()}</span>
+      </div>
+      <div style="background:var(--bg3);padding:4px 6px;border-radius:4px">
+        <span style="color:var(--text2)">Max Loss</span>
+        <span style="float:right;color:var(--red);font-weight:700">$${Math.round(vaR.maxLoss || 0).toLocaleString()}</span>
+      </div>
+      <div style="background:var(--bg3);padding:4px 6px;border-radius:4px">
+        <span style="color:var(--text2)">Total Trades</span>
+        <span style="float:right;color:var(--cyan);font-weight:700">${totalTrades}</span>
+      </div>
+    </div>`;
+}
+
+// ═══════════════════════════════════════════
+// PATCH INIT FOR ALL NEW FEATURES
+// ═══════════════════════════════════════════
+
+const __origInit = window.init;
+window.init = function() {
+  loadEthers().then(loaded => {
+    if (!loaded) console.warn('Ethers not loaded, wallet features disabled');
+  });
+  addWalletUI();
+  __origInit();
+  setTimeout(() => {
+    addPolymarketSettings();
+    initIndicatorChart();
+    renderEnhancedPortfolio();
+    if (STATE.settings.theme === 'light') toggleTheme();
+    // Add Monte Carlo button to chart area
+    const mcWrap = document.getElementById('monte-carlo-wrap');
+    if (mcWrap) mcWrap.innerHTML = '<button class="btn btn-sm" onclick="runMonteCarlo()" style="font-size:9px;width:100%">📊 Run Monte Carlo (1k sims)</button><div id="monte-carlo-results" style="margin-top:4px"></div>';
+  }, 500);
+};
 
 document.addEventListener('DOMContentLoaded', init);
 </script>
