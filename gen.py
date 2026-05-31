@@ -1,4 +1,8 @@
-<!DOCTYPE html>
+#!/usr/bin/env python3
+"""Generate complete MiroFish v6.0 HTML with all bug fixes + multi-market"""
+import sys, json
+
+HEAD = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -224,7 +228,9 @@ tr:hover td { background: var(--bg3); }
     <button onclick="switchPanel('settings',this)" title="Settings">⚙️</button>
   </div>
   <div class="main-content">
-    <div class="panel active" id="panel-signals">
+"""
+
+SIGNALS_PANEL = r"""    <div class="panel active" id="panel-signals">
       <div class="card">
         <div class="card-h">
           <span class="card-title">📡 LIVE SIGNALS — RANKED BY CONFIDENCE</span>
@@ -255,7 +261,9 @@ tr:hover td { background: var(--bg3); }
         </div>
       </div>
     </div>
-    <div class="panel" id="panel-markets">
+"""
+
+PANELS = r"""    <div class="panel" id="panel-markets">
       <div class="card">
         <div class="card-h">
           <span class="card-title">📊 ALL MARKETS</span>
@@ -452,7 +460,9 @@ tr:hover td { background: var(--bg3); }
   </div>
 </div>
 <div id="toast"></div>
-<script>
+"""
+
+JS_CODE = r"""<script>
 // ===== STATE with safe localStorage =====
 function loadSafe(k, fb) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; } }
 const STATE = {
@@ -1077,4 +1087,14 @@ function init() {
 document.addEventListener('DOMContentLoaded', init);
 </script>
 </body>
-</html>
+</html>"""
+
+PATH = r'C:\Users\Brittany\AppData\Local\Temp\opencode\TuFish\index.html'
+
+with open(PATH, 'w', encoding='utf-8') as f:
+    f.write(HEAD)
+    f.write(SIGNALS_PANEL)
+    f.write(PANELS)
+    f.write(JS_CODE)
+
+print(f'Written {len(HEAD)+len(SIGNALS_PANEL)+len(PANELS)+len(JS_CODE)} chars to {PATH}')
