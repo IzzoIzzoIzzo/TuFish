@@ -46,7 +46,7 @@ Just open `index.html` in any modern browser. No server required.
 
 ```bash
 # Clone the repo
-git clone https://github.com/IzzoIzzoIzzo/TuFish.git
+git clone https://github.com/IzzoSol/TuFish.git
 
 # Open in browser
 cd TuFish
